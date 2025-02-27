@@ -8,6 +8,7 @@ from supabase import create_client
 from io import StringIO, BytesIO
 import tempfile
 import extra_streamlit_components as stx
+import logging
 from dataset_handler import (
     check_supabase_storage,
     upload_to_supabase,
@@ -16,26 +17,57 @@ from dataset_handler import (
     make_api_call,
     get_user_datasets
 )
+import sys
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
+logger.info("Environment variables loaded")
+
+# Log available secrets (without sensitive values)
+logger.info("Available Streamlit secrets keys: %s", list(st.secrets.keys()))
 
 # Get API base URL from environment
 API_BASE_URL = st.secrets.get("API_BASE_URL", os.getenv('API_BASE_URL', 'http://localhost:5000'))
+logger.info("API_BASE_URL configured as: %s", API_BASE_URL)
 
 # Supabase configuration
-SUPABASE_URL = st.secrets.get("SUPABASE_URL", os.getenv('SUPABASE_URL'))
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", os.getenv('SUPABASE_KEY'))
-
-# Initialize Supabase client
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+try:
+    SUPABASE_URL = st.secrets.get("SUPABASE_URL", os.getenv('SUPABASE_URL'))
+    SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", os.getenv('SUPABASE_KEY'))
+    logger.info("Supabase configuration loaded")
+    
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        logger.error("Missing Supabase credentials")
+        st.error("Missing Supabase credentials. Please check your configuration.")
+    
+    # Initialize Supabase client
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    logger.info("Supabase client initialized successfully")
+except Exception as e:
+    logger.error("Error initializing Supabase: %s", str(e))
+    st.error(f"Error initializing Supabase: {str(e)}")
 
 def setup_kaggle_credentials():
     """Setup Kaggle credentials from Streamlit secrets"""
     try:
+        logger.info("Setting up Kaggle credentials...")
+        
+        # Check if Kaggle credentials exist in secrets
+        if not hasattr(st.secrets, 'kaggle'):
+            logger.error("No Kaggle credentials found in Streamlit secrets")
+            st.error("Kaggle credentials not found in configuration")
+            return False
+            
         # Create .kaggle directory if it doesn't exist
         kaggle_dir = os.path.expanduser('~/.kaggle')
+        logger.info("Kaggle directory path: %s", kaggle_dir)
+        
         if not os.path.exists(kaggle_dir):
+            logger.info("Creating Kaggle directory")
             os.makedirs(kaggle_dir)
         
         # Create kaggle.json file
@@ -43,21 +75,27 @@ def setup_kaggle_credentials():
             "username": st.secrets.kaggle.KAGGLE_USERNAME,
             "key": st.secrets.kaggle.KAGGLE_KEY
         }
+        logger.info("Kaggle credentials prepared for username: %s", kaggle_cred["username"])
         
         # Write credentials to file
-        kaggle_file = os.path.join(kaggle_dir)
+        kaggle_file = os.path.join(kaggle_dir, 'kaggle.json')
+        logger.info("Writing Kaggle credentials to: %s", kaggle_file)
+        
         with open(kaggle_file, 'w') as f:
             json.dump(kaggle_cred, f)
         
         # Set proper permissions
         os.chmod(kaggle_file, 0o600)
+        logger.info("Kaggle credentials file permissions set")
         
         # Set environment variables as well
         os.environ['KAGGLE_USERNAME'] = st.secrets.kaggle.KAGGLE_USERNAME
         os.environ['KAGGLE_KEY'] = st.secrets.kaggle.KAGGLE_KEY
+        logger.info("Kaggle environment variables set")
         
         return True
     except Exception as e:
+        logger.error("Error setting up Kaggle credentials: %s", str(e))
         st.error(f"Error setting up Kaggle credentials: {str(e)}")
         return False
 
@@ -139,20 +177,23 @@ st.markdown("""
 def init_auth_state():
     """Initialize authentication state"""
     try:
+        logger.info("Initializing authentication state")
         # Get current session
         session = supabase.auth.get_session()
         if session:
+            logger.info("User session found")
             st.session_state.authenticated = True
             st.session_state.user = session.user
             if 'current_page' not in st.session_state:
                 st.session_state.current_page = 'main'
         else:
+            logger.info("No user session found")
             st.session_state.authenticated = False
             st.session_state.user = None
             if 'current_page' not in st.session_state:
                 st.session_state.current_page = 'welcome'
     except Exception as e:
-        print(f"Error initializing auth state: {str(e)}")
+        logger.error("Error initializing auth state: %s", str(e))
         st.session_state.authenticated = False
         st.session_state.user = None
         if 'current_page' not in st.session_state:
@@ -332,26 +373,36 @@ def show_register_page():
 def download_kaggle_dataset(dataset_name):
     """Download dataset from Kaggle"""
     try:
+        logger.info("Starting Kaggle dataset download for: %s", dataset_name)
+        
         # Setup Kaggle credentials first
         if not setup_kaggle_credentials():
+            logger.error("Failed to setup Kaggle credentials")
             st.error("Failed to setup Kaggle credentials")
             return None
             
+        logger.info("Importing Kaggle API modules...")
         # Import kaggle here to avoid early authentication
         import kaggle.api
         from kaggle.api.kaggle_api_extended import KaggleApi
         
         # Initialize the Kaggle API
+        logger.info("Initializing Kaggle API...")
         api = KaggleApi()
         api.authenticate()
+        logger.info("Kaggle API authenticated successfully")
         
         # Download the dataset
+        logger.info("Downloading dataset files...")
         api.dataset_download_files(dataset_name, path='.', unzip=True)
+        logger.info("Dataset downloaded successfully")
         
         # Find CSV files
         csv_files = [f for f in os.listdir('.') if f.endswith('.csv')]
+        logger.info("Found CSV files: %s", csv_files)
         return csv_files
     except Exception as e:
+        logger.error("Error downloading from Kaggle: %s", str(e))
         st.error(f"Error downloading from Kaggle: {str(e)}")
         return None
 
@@ -642,22 +693,96 @@ print(response.json())
             except Exception as e:
                 st.error(f"Error fetching API key: {str(e)}")
 
+def show_debug_page():
+    """Display debug information"""
+    st.title("Debug Information")
+    
+    # Show environment information
+    st.subheader("Environment")
+    st.json({
+        "API_BASE_URL": API_BASE_URL,
+        "SUPABASE_URL": SUPABASE_URL,
+        "Has SUPABASE_KEY": bool(SUPABASE_KEY),
+        "Working Directory": os.getcwd(),
+        "Python Version": sys.version,
+    })
+    
+    # Show Streamlit secrets
+    st.subheader("Streamlit Secrets")
+    st.json({
+        "Available Keys": list(st.secrets.keys()),
+        "Has Kaggle Config": hasattr(st.secrets, 'kaggle'),
+    })
+    
+    # Show session state
+    st.subheader("Session State")
+    st.json(dict(st.session_state))
+    
+    # Show recent logs
+    st.subheader("Recent Logs")
+    log_stream = StringIO()
+    logging_handler = logging.StreamHandler(log_stream)
+    logging_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    logger.addHandler(logging_handler)
+    st.code(log_stream.getvalue())
+    
+    # Test connections
+    st.subheader("Connection Tests")
+    
+    # Test Supabase
+    try:
+        supabase.auth.get_session()
+        st.success("✅ Supabase connection successful")
+    except Exception as e:
+        st.error(f"❌ Supabase connection failed: {str(e)}")
+    
+    # Test API
+    try:
+        response = requests.get(f"{API_BASE_URL}/api/hello")
+        st.success(f"✅ API connection successful: {response.json()}")
+    except Exception as e:
+        st.error(f"❌ API connection failed: {str(e)}")
+    
+    # Test Kaggle
+    if st.button("Test Kaggle Connection"):
+        try:
+            setup_kaggle_credentials()
+            import kaggle
+            kaggle.api.authenticate()
+            st.success("✅ Kaggle authentication successful")
+        except Exception as e:
+            st.error(f"❌ Kaggle authentication failed: {str(e)}")
+
 # Main app flow
 def main():
-    # Check authentication status first
-    print(st.session_state)
-    if st.session_state.authenticated:
-        if st.session_state.current_page != 'main':
-            st.session_state.current_page = 'main'
-            st.rerun()
-        show_main_app()
-    else:
-        if st.session_state.current_page == 'welcome':
-            show_welcome_page()
-        elif st.session_state.current_page == 'login':
-            show_login_page()
-        elif st.session_state.current_page == 'register':
-            show_register_page()
+    try:
+        logger.info("Starting main application")
+        logger.info("Current session state: %s", dict(st.session_state))
+        
+        # Add debug page access
+        if 'debug' in st.query_params:
+            show_debug_page()
+            return
+            
+        # Rest of the main function...
+        if st.session_state.authenticated:
+            logger.info("User is authenticated, showing main app")
+            if st.session_state.current_page != 'main':
+                st.session_state.current_page = 'main'
+                st.rerun()
+            show_main_app()
+        else:
+            logger.info("User is not authenticated, showing auth pages")
+            if st.session_state.current_page == 'welcome':
+                show_welcome_page()
+            elif st.session_state.current_page == 'login':
+                show_login_page()
+            elif st.session_state.current_page == 'register':
+                show_register_page()
+    except Exception as e:
+        logger.error("Error in main application: %s", str(e))
+        st.error(f"An error occurred: {str(e)}")
 
 if __name__ == "__main__":
+    logger.info("Application starting")
     main()
