@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import kaggle
 import os
 from dotenv import load_dotenv
 import requests
@@ -22,7 +21,14 @@ from dataset_handler import (
 load_dotenv()
 
 # Get API base URL from environment
-API_BASE_URL = os.getenv('API_BASE_URL', 'http://localhost:5000')
+API_BASE_URL = st.secrets.get("API_BASE_URL", os.getenv('API_BASE_URL', 'http://localhost:5000'))
+
+# Supabase configuration
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", os.getenv('SUPABASE_URL'))
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", os.getenv('SUPABASE_KEY'))
+
+# Initialize Supabase client
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def setup_kaggle_credentials():
     """Setup Kaggle credentials from Streamlit secrets"""
@@ -39,12 +45,16 @@ def setup_kaggle_credentials():
         }
         
         # Write credentials to file
-        kaggle_file = os.path.join(kaggle_dir, 'kaggle.json')
+        kaggle_file = os.path.join(kaggle_dir)
         with open(kaggle_file, 'w') as f:
             json.dump(kaggle_cred, f)
         
         # Set proper permissions
         os.chmod(kaggle_file, 0o600)
+        
+        # Set environment variables as well
+        os.environ['KAGGLE_USERNAME'] = st.secrets.kaggle.KAGGLE_USERNAME
+        os.environ['KAGGLE_KEY'] = st.secrets.kaggle.KAGGLE_KEY
         
         return True
     except Exception as e:
@@ -125,13 +135,6 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
-
-# Supabase configuration
-SUPABASE_URL = "https://rnqhongfxhavszyfibzr.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJucWhvbmdmeGhhdnN6eWZpYnpyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDA2ODE3MjYsImV4cCI6MjA1NjI1NzcyNn0.UmwYVNEQ3IT1JUW7sK68p18RwQVYL_YVdbS57ihqmrE"
-
-# Initialize Supabase client
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def init_auth_state():
     """Initialize authentication state"""
@@ -329,15 +332,21 @@ def show_register_page():
 def download_kaggle_dataset(dataset_name):
     """Download dataset from Kaggle"""
     try:
-        # Import kaggle here to avoid early authentication
-        import kaggle
-        
-        # Setup Kaggle credentials
+        # Setup Kaggle credentials first
         if not setup_kaggle_credentials():
+            st.error("Failed to setup Kaggle credentials")
             return None
+            
+        # Import kaggle here to avoid early authentication
+        import kaggle.api
+        from kaggle.api.kaggle_api_extended import KaggleApi
+        
+        # Initialize the Kaggle API
+        api = KaggleApi()
+        api.authenticate()
         
         # Download the dataset
-        kaggle.api.dataset_download_files(dataset_name, path='.', unzip=True)
+        api.dataset_download_files(dataset_name, path='.', unzip=True)
         
         # Find CSV files
         csv_files = [f for f in os.listdir('.') if f.endswith('.csv')]
