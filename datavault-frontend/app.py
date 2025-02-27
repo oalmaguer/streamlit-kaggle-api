@@ -21,6 +21,10 @@ from dataset_handler import (
 # Load environment variables
 load_dotenv()
 
+# Configure Kaggle credentials from Streamlit secrets
+os.environ['KAGGLE_USERNAME'] = st.secrets.kaggle.KAGGLE_USERNAME
+os.environ['KAGGLE_KEY'] = st.secrets.kaggle.KAGGLE_KEY
+
 # Get API base URL from environment
 API_BASE_URL = os.getenv('API_BASE_URL', 'http://localhost:5000')
 
