@@ -21,12 +21,35 @@ from dataset_handler import (
 # Load environment variables
 load_dotenv()
 
-# Configure Kaggle credentials from Streamlit secrets
-os.environ['KAGGLE_USERNAME'] = st.secrets.kaggle.KAGGLE_USERNAME
-os.environ['KAGGLE_KEY'] = st.secrets.kaggle.KAGGLE_KEY
-
 # Get API base URL from environment
 API_BASE_URL = os.getenv('API_BASE_URL', 'http://localhost:5000')
+
+def setup_kaggle_credentials():
+    """Setup Kaggle credentials from Streamlit secrets"""
+    try:
+        # Create .kaggle directory if it doesn't exist
+        kaggle_dir = os.path.expanduser('~/.kaggle')
+        if not os.path.exists(kaggle_dir):
+            os.makedirs(kaggle_dir)
+        
+        # Create kaggle.json file
+        kaggle_cred = {
+            "username": st.secrets.kaggle.KAGGLE_USERNAME,
+            "key": st.secrets.kaggle.KAGGLE_KEY
+        }
+        
+        # Write credentials to file
+        kaggle_file = os.path.join(kaggle_dir, 'kaggle.json')
+        with open(kaggle_file, 'w') as f:
+            json.dump(kaggle_cred, f)
+        
+        # Set proper permissions
+        os.chmod(kaggle_file, 0o600)
+        
+        return True
+    except Exception as e:
+        st.error(f"Error setting up Kaggle credentials: {str(e)}")
+        return False
 
 # Page configuration
 st.set_page_config(
@@ -303,6 +326,25 @@ def show_register_page():
     
     st.markdown('</div>', unsafe_allow_html=True)
 
+def download_kaggle_dataset(dataset_name):
+    """Download dataset from Kaggle"""
+    try:
+        # Import kaggle here to avoid early authentication
+        import kaggle
+        
+        # Setup Kaggle credentials
+        if not setup_kaggle_credentials():
+            return None
+        
+        # Download the dataset
+        kaggle.api.dataset_download_files(dataset_name, path='.', unzip=True)
+        
+        # Find CSV files
+        csv_files = [f for f in os.listdir('.') if f.endswith('.csv')]
+        return csv_files
+    except Exception as e:
+        st.error(f"Error downloading from Kaggle: {str(e)}")
+        return None
 
 def show_main_app():
     """Display main application"""
@@ -478,14 +520,7 @@ response = requests.get(
                 
                 # If we get here, the dataset doesn't exist, so download from Kaggle
                 with st.spinner("Dataset not found in storage. Downloading from Kaggle..."):
-                    # Authenticate with Kaggle
-                    kaggle.api.authenticate()
-                    
-                    # Download the dataset
-                    kaggle.api.dataset_download_files(dataset_name, path='.', unzip=True)
-                    
-                    # Try to find CSV files in the current directory
-                    csv_files = [f for f in os.listdir('.') if f.endswith('.csv')]
+                    csv_files = download_kaggle_dataset(dataset_name)
                     
                     if csv_files:
                         # If there are multiple CSV files, prefer 'scrubbed.csv' or take the first one
@@ -507,10 +542,9 @@ response = requests.get(
                         # Clean up local files
                         for file in csv_files:
                             os.remove(file)
-                        
                     else:
                         st.error("No CSV files found in the downloaded dataset.")
-                        
+                
             except Exception as e:
                 st.error(f"Error: {str(e)}")
                 st.error("Please make sure you have entered a valid dataset name and have proper Kaggle credentials configured.")
