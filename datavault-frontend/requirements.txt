@@ -5,3 +5,4 @@ requests==2.31.0
 python-dotenv==1.0.1
 supabase==1.0.3
 extra-streamlit-components==0.1.60
+plotly==5.18.0

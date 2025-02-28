@@ -18,6 +18,7 @@ from dataset_handler import (
     get_user_datasets
 )
 import sys
+from datetime import datetime, timedelta
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -34,70 +35,75 @@ logger.info("Available Streamlit secrets keys: %s", list(st.secrets.keys()))
 API_BASE_URL = st.secrets.get("API_BASE_URL", os.getenv('API_BASE_URL', 'http://localhost:5000'))
 logger.info("API_BASE_URL configured as: %s", API_BASE_URL)
 
-# Supabase configuration
-try:
-    SUPABASE_URL = st.secrets.get("SUPABASE_URL", os.getenv('SUPABASE_URL'))
-    SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", os.getenv('SUPABASE_KEY'))
-    logger.info("Supabase configuration loaded")
-    
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        logger.error("Missing Supabase credentials")
-        st.error("Missing Supabase credentials. Please check your configuration.")
-    
-    # Initialize Supabase client
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    logger.info("Supabase client initialized successfully")
-except Exception as e:
-    logger.error("Error initializing Supabase: %s", str(e))
-    st.error(f"Error initializing Supabase: {str(e)}")
-
-def setup_kaggle_credentials():
-    """Setup Kaggle credentials from Streamlit secrets"""
+def init_supabase():
+    """Initialize Supabase client"""
     try:
-        logger.info("Setting up Kaggle credentials...")
+        SUPABASE_URL = st.secrets.get("SUPABASE_URL", os.getenv('SUPABASE_URL'))
+        SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", os.getenv('SUPABASE_KEY'))
+        logger.info("Supabase configuration loaded")
         
-        # Check if Kaggle credentials exist in secrets
-        if not hasattr(st.secrets, 'kaggle'):
-            logger.error("No Kaggle credentials found in Streamlit secrets")
-            st.error("Kaggle credentials not found in configuration")
-            return False
-            
-        # Create .kaggle directory if it doesn't exist
-        kaggle_dir = os.path.expanduser('~/.kaggle')
-        logger.info("Kaggle directory path: %s", kaggle_dir)
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            logger.error("Missing Supabase credentials")
+            st.error("Missing Supabase credentials. Please check your configuration.")
+            return None
         
-        if not os.path.exists(kaggle_dir):
-            logger.info("Creating Kaggle directory")
-            os.makedirs(kaggle_dir)
-        
-        # Create kaggle.json file
-        kaggle_cred = {
-            "username": st.secrets.kaggle.KAGGLE_USERNAME,
-            "key": st.secrets.kaggle.KAGGLE_KEY
-        }
-        logger.info("Kaggle credentials prepared for username: %s", kaggle_cred["username"])
-        
-        # Write credentials to file
-        kaggle_file = os.path.join(kaggle_dir, 'kaggle.json')
-        logger.info("Writing Kaggle credentials to: %s", kaggle_file)
-        
-        with open(kaggle_file, 'w') as f:
-            json.dump(kaggle_cred, f)
-        
-        # Set proper permissions
-        os.chmod(kaggle_file, 0o600)
-        logger.info("Kaggle credentials file permissions set")
-        
-        # Set environment variables as well
-        os.environ['KAGGLE_USERNAME'] = st.secrets.kaggle.KAGGLE_USERNAME
-        os.environ['KAGGLE_KEY'] = st.secrets.kaggle.KAGGLE_KEY
-        logger.info("Kaggle environment variables set")
-        
-        return True
+        # Initialize Supabase client
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        logger.info("Supabase client initialized successfully")
+        return supabase
     except Exception as e:
-        logger.error("Error setting up Kaggle credentials: %s", str(e))
-        st.error(f"Error setting up Kaggle credentials: {str(e)}")
-        return False
+        logger.error("Error initializing Supabase: %s", str(e))
+        st.error(f"Error initializing Supabase: {str(e)}")
+        return None
+
+def check_session():
+    """Check for existing session and refresh if needed"""
+    try:
+        if not st.session_state.get('supabase'):
+            st.session_state.supabase = init_supabase()
+        
+        # Try to get existing session
+        session = st.session_state.supabase.auth.get_session()
+        
+        if session:
+            # Check if session needs refresh (if less than 60 mins remaining)
+            expires_at = datetime.fromtimestamp(session.expires_at)
+            if expires_at - datetime.now() < timedelta(minutes=60):
+                # Refresh the session
+                st.session_state.supabase.auth.refresh_session()
+            
+            # Update session state with user info
+            st.session_state.authenticated = True
+            st.session_state.user = session.user
+            return True
+    except Exception as e:
+        print(f"Session check error: {str(e)}")
+        st.session_state.authenticated = False
+        st.session_state.user = None
+    return False
+
+def init_session_state():
+    """Initialize session state variables"""
+    try:
+        # Initialize Supabase first
+        if 'supabase' not in st.session_state:
+            st.session_state.supabase = init_supabase()
+        
+        # Try to recover existing session
+        if not st.session_state.get('authenticated', False):
+            check_session()
+        
+        # Initialize other state variables only if needed
+        if 'current_page' not in st.session_state:
+            st.session_state.current_page = 'welcome'
+        if 'current_dataset' not in st.session_state:
+            st.session_state.current_dataset = None
+        if 'df' not in st.session_state:
+            st.session_state.df = None
+            
+    except Exception as e:
+        print(f"Session state initialization error: {str(e)}")
+        st.error("Error initializing application. Please try refreshing the page.")
 
 # Page configuration
 st.set_page_config(
@@ -174,67 +180,27 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-def init_auth_state():
-    """Initialize authentication state"""
-    try:
-        logger.info("Initializing authentication state")
-        # Get current session
-        session = supabase.auth.get_session()
-        if session:
-            logger.info("User session found")
-            st.session_state.authenticated = True
-            st.session_state.user = session.user
-            if 'current_page' not in st.session_state:
-                st.session_state.current_page = 'main'
-        else:
-            logger.info("No user session found")
-            st.session_state.authenticated = False
-            st.session_state.user = None
-            if 'current_page' not in st.session_state:
-                st.session_state.current_page = 'welcome'
-    except Exception as e:
-        logger.error("Error initializing auth state: %s", str(e))
-        st.session_state.authenticated = False
-        st.session_state.user = None
-        if 'current_page' not in st.session_state:
-            st.session_state.current_page = 'welcome'
-
-# Initialize session state
-init_auth_state()
-
-def init_session_state():
-    """Initialize session state variables"""
-    session_vars = {
-        'summary_response': None,
-        'stats_response': None,
-        'head_response': None,
-        'filter_response': None,
-        'unique_response': None,
-        'current_dataset': None,
-        'df': None
-    }
-    for var, value in session_vars.items():
-        if var not in st.session_state:
-            st.session_state[var] = value
-
 def login_with_email(email, password):
     """Login with email and password"""
     try:
-        response = supabase.auth.sign_in_with_password({
+        auth = st.session_state.supabase.auth.sign_in_with_password({
             "email": email,
             "password": password
         })
-        st.session_state.authenticated = True
-        st.session_state.user = response.user
-        return True
+        if auth.user:
+            st.session_state.authenticated = True
+            st.session_state.user = auth.user
+            # Store session data
+            st.session_state.session = auth.session
+            return True
     except Exception as e:
         st.error(f"Login failed: {str(e)}")
-        return False
+    return False
 
 def login_with_google():
     """Login with Google"""
     try:
-        response = supabase.auth.sign_in_with_oauth({
+        response = st.session_state.supabase.auth.sign_in_with_oauth({
             "provider": "google"
         })
         # Get the authorization URL
@@ -247,7 +213,7 @@ def login_with_google():
 def register(email, password):
     """Register new user"""
     try:
-        response = supabase.auth.sign_up({
+        response = st.session_state.supabase.auth.sign_up({
             "email": email,
             "password": password
         })
@@ -258,26 +224,18 @@ def register(email, password):
         return False
 
 def logout():
-    """Logout user"""
+    """Logout the current user"""
     try:
-        supabase.auth.sign_out()
-        # Clear all session state variables
+        st.session_state.supabase.auth.sign_out()
+    except:
+        pass
+    finally:
+        # Clear all session state
         for key in list(st.session_state.keys()):
             del st.session_state[key]
-        # Reinitialize only the necessary session state
-        st.session_state.authenticated = False
-        st.session_state.user = None
-        st.session_state.current_page = 'welcome'
-        # Clear any API responses
-        st.session_state.summary_response = None
-        st.session_state.stats_response = None
-        st.session_state.head_response = None
-        st.session_state.filter_response = None
-        st.session_state.unique_response = None
-        st.session_state.current_dataset = None
-        st.session_state.df = None
-    except Exception as e:
-        st.error(f"Logout failed: {str(e)}")
+        # Reinitialize clean session state
+        init_session_state()
+        st.rerun()
 
 def show_welcome_page():
     """Display welcome page"""
@@ -419,7 +377,7 @@ def show_main_app():
         
         # Show user's datasets
         st.markdown("### Your Datasets")
-        datasets = get_user_datasets(supabase, st.session_state.user.id)
+        datasets = get_user_datasets(st.session_state.supabase, st.session_state.user.id)
         if datasets:
             selected_dataset = st.selectbox(
                 "Select a dataset to load",
@@ -429,7 +387,7 @@ def show_main_app():
             )
             if st.button("Load Selected Dataset") or st.session_state.get('reload_dataset', False):
                 selected_path = next(d['path'] for d in datasets if d['name'] == selected_dataset)
-                df = get_from_supabase(supabase, selected_path)
+                df = get_from_supabase(st.session_state.supabase, selected_path)
                 if df is not None:
                     display_dataset_info(df, selected_path)
                     # Reset the reload flag
@@ -455,7 +413,7 @@ def show_main_app():
             
             # Show existing API keys
             try:
-                api_keys = supabase.table('api_keys').select("*").eq('user_id', st.session_state.user.id).execute()
+                api_keys = st.session_state.supabase.table('api_keys').select("*").eq('user_id', st.session_state.user.id).execute()
                 if api_keys.data:
                     st.markdown("### Your API Keys")
                     for key in api_keys.data:
@@ -468,7 +426,7 @@ def show_main_app():
             if st.button("Generate New API Key"):
                 try:
                     # Get current session token
-                    session = supabase.auth.get_session()
+                    session = st.session_state.supabase.auth.get_session()
                     token = session.access_token
                     
                     # Call API to generate new key
@@ -567,11 +525,11 @@ response = requests.get(
         if st.button("Download new Dataset"):
             try:
                 # First, check if the dataset already exists in Supabase
-                existing_path = check_supabase_storage(supabase, st.session_state.user.id, dataset_name.replace('/', '_'), 'scrubbed.csv')
+                existing_path = check_supabase_storage(st.session_state.supabase, st.session_state.user.id, dataset_name.replace('/', '_'), 'scrubbed.csv')
                 
                 if existing_path:
                     st.info("Dataset found in storage, loading from Supabase...")
-                    df = get_from_supabase(supabase, existing_path)
+                    df = get_from_supabase(st.session_state.supabase, existing_path)
                     if df is not None:
                         display_dataset_info(df, existing_path)
                         # Set flag to reload sidebar
@@ -587,12 +545,12 @@ response = requests.get(
                         csv_file = 'scrubbed.csv' if 'scrubbed.csv' in csv_files else csv_files[0]
                         
                         # Upload to Supabase
-                        bucket_path = upload_to_supabase(supabase, st.session_state.user.id, csv_file, dataset_name.replace('/', '_'))
+                        bucket_path = upload_to_supabase(st.session_state.supabase, st.session_state.user.id, csv_file, dataset_name.replace('/', '_'))
                         if bucket_path:
                             st.success(f"Dataset uploaded to Supabase storage: {bucket_path}")
                             
                             # Read the dataset from Supabase
-                            df = get_from_supabase(supabase, bucket_path)
+                            df = get_from_supabase(st.session_state.supabase, bucket_path)
                             if df is not None:
                                 display_dataset_info(df, bucket_path)
                                 # Set flag to reload sidebar
@@ -619,7 +577,7 @@ response = requests.get(
             
             # Get the user's API key
             try:
-                api_key_result = supabase.table('api_keys').select("key").eq('user_id', st.session_state.user.id).limit(1).execute()
+                api_key_result = st.session_state.supabase.table('api_keys').select("key").eq('user_id', st.session_state.user.id).limit(1).execute()
                 api_key = api_key_result.data[0]['key'] if api_key_result.data else None
                 
                 if not api_key:
@@ -731,7 +689,7 @@ def show_debug_page():
     
     # Test Supabase
     try:
-        supabase.auth.get_session()
+        st.session_state.supabase.auth.get_session()
         st.success("✅ Supabase connection successful")
     except Exception as e:
         st.error(f"❌ Supabase connection failed: {str(e)}")
@@ -757,19 +715,20 @@ def show_debug_page():
 def main():
     try:
         logger.info("Starting main application")
+        
+        # Initialize session state first
+        init_session_state()
+        
         logger.info("Current session state: %s", dict(st.session_state))
         
         # Add debug page access
         if 'debug' in st.query_params:
             show_debug_page()
             return
-            
-        # Rest of the main function...
+        
+        # Check authentication after initialization
         if st.session_state.authenticated:
             logger.info("User is authenticated, showing main app")
-            if st.session_state.current_page != 'main':
-                st.session_state.current_page = 'main'
-                st.rerun()
             show_main_app()
         else:
             logger.info("User is not authenticated, showing auth pages")
@@ -779,6 +738,8 @@ def main():
                 show_login_page()
             elif st.session_state.current_page == 'register':
                 show_register_page()
+            else:
+                show_welcome_page()
     except Exception as e:
         logger.error("Error in main application: %s", str(e))
         st.error(f"An error occurred: {str(e)}")
