@@ -53,88 +53,33 @@ def upload_to_supabase(supabase, user_id, file_path, dataset_name):
         st.error(f"Error uploading to Supabase: {str(e)}")
         return None
 
-def get_from_supabase(supabase, bucket_path):
-    """Get a file from Supabase Storage and return as DataFrame"""
+def get_from_supabase(supabase_client, bucket_path):
+    """Get dataset from Supabase storage"""
     try:
         # Get file from Supabase storage
-        response = supabase.storage.from_('datasets').download(bucket_path)
+        response = supabase_client.storage.from_('datasets').download(bucket_path)
         
-        # Try to detect encoding first using chardet
         try:
-            import chardet
-            detected = chardet.detect(response)
-            detected_encoding = detected['encoding']
-            if detected_encoding:
-                try:
-                    df = pd.read_csv(
-                        BytesIO(response), 
-                        encoding=detected_encoding, 
-                        on_bad_lines='skip',
-                        encoding_errors='replace'
-                    )
-                    st.success(f"Successfully loaded dataset using detected encoding: {detected_encoding}")
-                    return df
-                except Exception as e:
-                    st.warning(f"Detected encoding {detected_encoding} failed, trying fallback encodings...")
-        except ImportError:
-            pass
-
-        # Fallback encodings to try
-        encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252', 'utf-16', 'ascii']
-        errors = []
-        
-        # Try reading with each encoding
-        for encoding in encodings:
-            try:
-                # Create a new BytesIO object for each attempt
-                file_obj = BytesIO(response)
-                
-                # Convert bytes to DataFrame with specific encoding
-                df = pd.read_csv(
-                    file_obj,
-                    encoding=encoding, 
-                    on_bad_lines='skip',
-                    engine='python',  # More flexible but slower engine
-                    encoding_errors='replace',  # Replace invalid chars with ?
-                    low_memory=False  # Avoid mixed type inference issues
-                )
-                st.success(f"Successfully loaded dataset using encoding: {encoding}")
-                return df
-            except UnicodeDecodeError as e:
-                errors.append(f"{encoding}: {str(e)}")
-                continue
-            except Exception as e:
-                errors.append(f"{encoding}: Unexpected error: {str(e)}")
-                continue
-            finally:
-                file_obj.close()
-        
-        # If we get here, try one last time with binary read and explicit decoding
-        try:
-            file_obj = BytesIO(response)
-            content = response.decode('utf-8', errors='replace')
-            df = pd.read_csv(
-                StringIO(content),
-                on_bad_lines='skip',
-                engine='python',
-                low_memory=False
-            )
-            st.success("Successfully loaded dataset using manual UTF-8 decoding with replacement")
+            # Try to read as CSV first
+            df = pd.read_csv(BytesIO(response), on_bad_lines='skip')
             return df
-        except Exception as e:
-            errors.append(f"Manual UTF-8 decode: {str(e)}")
-        finally:
-            file_obj.close()
-        
-        # If we get here, all attempts failed
-        st.error("Failed to read the CSV file with any encoding")
-        st.error("Attempted encodings and their errors:")
-        for error in errors:
-            st.error(f"- {error}")
-        return None
-            
+        except Exception as csv_error:
+            try:
+                # Try to read as Excel if CSV fails
+                df = pd.read_excel(BytesIO(response))
+                return df
+            except Exception as excel_error:
+                st.error(f"""
+                Failed to load dataset. Please ensure the file is a valid CSV or Excel file.
+                
+                Error details:
+                CSV error: {str(csv_error)}
+                Excel error: {str(excel_error)}
+                """)
+                return None
+                
     except Exception as e:
-        st.error(f"Error accessing Supabase storage: {str(e)}")
+        st.error(f"Error accessing dataset from storage: {str(e)}")
         return None
 
 def display_dataset_info(df, bucket_path):
