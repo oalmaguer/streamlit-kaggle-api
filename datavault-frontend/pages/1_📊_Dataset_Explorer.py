@@ -119,7 +119,7 @@ with tab1:
     if not username:
         st.warning("⚠️ Please configure your Kaggle credentials in the Settings page first.")
         if st.button("Go to Settings"):
-            st.switch_page("pages/4_Settings.py")  # Updated page reference
+            st.switch_page("pages/4_⚙️_Settings.py")
         st.stop()
     
     dataset_name = st.text_input(
