@@ -59,24 +59,59 @@ def get_from_supabase(supabase_client, bucket_path):
         # Get file from Supabase storage
         response = supabase_client.storage.from_('datasets').download(bucket_path)
         
+        # Try to detect encoding first using chardet
         try:
-            # Try to read as CSV first
-            df = pd.read_csv(BytesIO(response), on_bad_lines='skip')
-            return df
-        except Exception as csv_error:
+            import chardet
+            detected = chardet.detect(response)
+            detected_encoding = detected['encoding']
+            if detected_encoding:
+                try:
+                    df = pd.read_csv(
+                        BytesIO(response), 
+                        encoding=detected_encoding,
+                        on_bad_lines='skip'
+                    )
+                    st.success(f"Successfully loaded dataset using detected encoding: {detected_encoding}")
+                    return df
+                except Exception as e:
+                    st.warning(f"Detected encoding {detected_encoding} failed, trying fallback encodings...")
+        except ImportError:
+            pass
+
+        # Fallback encodings to try
+        encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252', 'utf-16', 'ascii']
+        errors = []
+        
+        for encoding in encodings:
             try:
-                # Try to read as Excel if CSV fails
-                df = pd.read_excel(BytesIO(response))
+                df = pd.read_csv(
+                    BytesIO(response), 
+                    encoding=encoding,
+                    on_bad_lines='skip'
+                )
+                st.success(f"Successfully loaded dataset using encoding: {encoding}")
                 return df
-            except Exception as excel_error:
-                st.error(f"""
-                Failed to load dataset. Please ensure the file is a valid CSV or Excel file.
-                
-                Error details:
-                CSV error: {str(csv_error)}
-                Excel error: {str(excel_error)}
-                """)
-                return None
+            except UnicodeDecodeError as e:
+                errors.append(f"{encoding}: {str(e)}")
+                continue
+            except Exception as e:
+                errors.append(f"{encoding}: Unexpected error: {str(e)}")
+                continue
+        
+        # If CSV reading fails, try Excel as last resort
+        try:
+            df = pd.read_excel(BytesIO(response))
+            st.success("Successfully loaded dataset as Excel file")
+            return df
+        except Exception as excel_error:
+            errors.append(f"Excel: {str(excel_error)}")
+        
+        # If we get here, all attempts failed
+        error_msg = "Failed to load dataset. Attempted the following:\n\n"
+        for error in errors:
+            error_msg += f"- {error}\n"
+        st.error(error_msg)
+        return None
                 
     except Exception as e:
         st.error(f"Error accessing dataset from storage: {str(e)}")
